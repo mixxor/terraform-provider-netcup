@@ -3,6 +3,7 @@ package provider_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,38 +57,35 @@ resource "netcup_scp_server_action" "test" {
 	})
 }
 
-// TestAccScpServerAction_rescueActivate covers an action whose request has no
-// body. The real SCP API rejects such requests with HTTP 400
-// error.content.type.invalid when the Content-Type header is missing, so the
-// mock does the same.
-func TestAccScpServerAction_rescueActivate(t *testing.T) {
-	server := newServerActionMockServer(t)
-	defer server.Close()
-
-	providerConfig := fmt.Sprintf(`
+// TestAccScpServerAction_bodyless verifies POST and DELETE actions keep an empty
+// payload while sending the exact JSON media type required by the SCP API.
+func TestAccScpServerAction_bodyless(t *testing.T) {
+	for _, action := range []string{"rescue_activate", "rescue_deactivate", "iso_detach"} {
+		t.Run(action, func(t *testing.T) {
+			server := newServerActionMockServer(t)
+			defer server.Close()
+			config := fmt.Sprintf(`
 provider "netcup" {
-  scp_access_token = "mock-token"
-  scp_base_url     = "%s/scp-core"
+ scp_access_token = "mock-token"
+ scp_base_url = "%s/scp-core"
 }
-`, server.URL)
-
-	resource.Test(t, resource.TestCase{
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: providerConfig + `
 resource "netcup_scp_server_action" "test" {
-  server_id = 12345
-  action    = "rescue_activate"
+ server_id = 12345
+ action = %q
 }
-`,
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("netcup_scp_server_action.test", "action", "rescue_activate"),
-					resource.TestCheckResourceAttrSet("netcup_scp_server_action.test", "id"),
-				),
-			},
-		},
-	})
+`, server.URL, action)
+			resource.Test(t, resource.TestCase{
+				ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+				Steps: []resource.TestStep{{
+					Config: config,
+					Check: resource.ComposeAggregateTestCheckFunc(
+						resource.TestCheckResourceAttr("netcup_scp_server_action.test", "action", action),
+						resource.TestCheckResourceAttrSet("netcup_scp_server_action.test", "id"),
+					),
+				}},
+			})
+		})
+	}
 }
 
 type serverActionMock struct {
@@ -119,27 +117,28 @@ func (m *serverActionMock) handleAction(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handleRescue mirrors POST /api/v1/servers/{id}/rescuesystem, which takes no
-// request body but still requires a Content-Type header.
-func (m *serverActionMock) handleRescue(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if r.Header.Get("Content-Type") == "" {
+// handleBodyless models the media type requirement without accepting a JSON
+// object in place of the empty request body.
+func (m *serverActionMock) handleBodyless(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"code":"error.content.type.invalid","message":"The HTTP header Content-Type must be 'type/subtype'"}`))
 		return
 	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil || len(body) != 0 {
+		http.Error(w, "expected an empty request body", http.StatusBadRequest)
+		return
+	}
 
 	m.mu.Lock()
-	m.actions = append(m.actions, "rescue_activate")
+	m.actions = append(m.actions, r.Method+" "+r.URL.Path)
 	m.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(map[string]any{"uuid": "task-rescue-1", "state": taskStateFinished}); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{"uuid": "task-bodyless-1", "state": taskStateFinished}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -150,7 +149,9 @@ func newServerActionMockServer(t *testing.T) *httptest.Server {
 	mock := &serverActionMock{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/scp-core/api/v1/servers/12345", mock.handleAction)
-	mux.HandleFunc("/scp-core/api/v1/servers/12345/rescuesystem", mock.handleRescue)
+	mux.HandleFunc("POST /scp-core/api/v1/servers/12345/rescuesystem", mock.handleBodyless)
+	mux.HandleFunc("DELETE /scp-core/api/v1/servers/12345/rescuesystem", mock.handleBodyless)
+	mux.HandleFunc("DELETE /scp-core/api/v1/servers/12345/iso", mock.handleBodyless)
 
 	return httptest.NewServer(mux)
 }
