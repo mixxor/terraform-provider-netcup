@@ -3,6 +3,7 @@ package provider_test
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -85,9 +86,10 @@ func mapPortsAttr(ingress bool) string {
 }
 
 type firewallPolicyMock struct {
-	mu          sync.Mutex
-	description string
-	rules       []map[string]any
+	mu               sync.Mutex
+	description      string
+	rules            []map[string]any
+	reverseAddresses bool
 }
 
 func (m *firewallPolicyMock) normalizeRules(in []any) []map[string]any {
@@ -96,12 +98,6 @@ func (m *firewallPolicyMock) normalizeRules(in []any) []map[string]any {
 		rule, ok := r.(map[string]any)
 		if !ok {
 			continue
-		}
-		// The real API stores sources and destinations as sets
-		for _, key := range []string{"sources", "destinations"} {
-			if items, ok := rule[key].([]any); ok {
-				slices.Reverse(items)
-			}
 		}
 		out = append(out, rule)
 	}
@@ -118,7 +114,22 @@ func (m *firewallPolicyMock) store(description string, rules []any) {
 func (m *firewallPolicyMock) load() (string, []map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.description, m.rules
+	// Alternate address order on every response while preserving rule order.
+	m.reverseAddresses = !m.reverseAddresses
+	rules := make([]map[string]any, len(m.rules))
+	for i, rule := range m.rules {
+		rules[i] = maps.Clone(rule)
+		for _, key := range []string{"sources", "destinations"} {
+			if items, ok := rule[key].([]any); ok {
+				items = slices.Clone(items)
+				if m.reverseAddresses {
+					slices.Reverse(items)
+				}
+				rules[i][key] = items
+			}
+		}
+	}
+	return m.description, rules
 }
 
 func (m *firewallPolicyMock) handleCreate(w http.ResponseWriter, r *http.Request) {
