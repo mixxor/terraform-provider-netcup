@@ -3,12 +3,12 @@
 page_title: "netcup_scp_user_firewall_policy Resource - terraform-provider-netcup"
 subcategory: ""
 description: |-
-  Manages a firewall policy in the netcup SCP account.
+  Manages a firewall policy in the netcup SCP account. Rules are evaluated in list order; sources and destinations within each rule are unordered sets.
 ---
 
 # netcup_scp_user_firewall_policy (Resource)
 
-Manages a firewall policy in the netcup SCP account.
+Manages a firewall policy in the netcup SCP account. Rules are evaluated in list order; sources and destinations within each rule are unordered sets.
 
 ## Example Usage
 

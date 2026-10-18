@@ -54,7 +54,7 @@ var scpUserFirewallPolicyRulesAttributes = map[string]schema.Attribute{
 }
 
 var scpUserFirewallPolicySchema = schema.Schema{
-	Description: "Manages a firewall policy in the netcup SCP account.",
+	Description: "Manages a firewall policy in the netcup SCP account. Rules are evaluated in list order; sources and destinations within each rule are unordered sets.",
 	Attributes: map[string]schema.Attribute{
 		"description": schema.StringAttribute{
 			Optional:    true,
